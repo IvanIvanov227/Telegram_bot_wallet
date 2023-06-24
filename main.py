@@ -10,7 +10,8 @@ states = None
 pre_com = None
 # Тип расхода
 type_expenses = None
-# message_id_inline = None
+message_id_inline = None
+state_message = False
 bot = telebot.TeleBot('6289799568:AAFArEfu7yepVGeseGNzwEdAC8F44H2Aiak')
 openai_token = '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'
 channel_id = '123'
@@ -45,18 +46,19 @@ def main(message):
         """
         result = [row[0] for row in cursor.execute(commands).fetchall()]
         if message.from_user.id not in result:
-
             command = """
                         INSERT INTO Users (user_id) VALUES (?);
                     """
-            cursor.execute(command, (message.from_user.id, ))
+            cursor.execute(command, (message.from_user.id,))
 
 
 @bot.message_handler(func=lambda message: "узнать" in message.text.lower() and "доход" in message.text.lower())
 def find_income(message):
     """Пользователь нажал кнопку узнать доход"""
-    global pre_com
-    pre_com = "Узнать доход"
+    global pre_com, message_id_inline, state_message
+    if state_message:
+        bot.delete_message(message.chat.id, message_id_inline)
+    bot.delete_message(message.chat.id, message.message_id)
     keyboard = types.InlineKeyboardMarkup(row_width=3)
     # i - income, цифра - это количество дней
     button1 = types.InlineKeyboardButton('Сегодня', callback_data='i0')
@@ -69,14 +71,17 @@ def find_income(message):
     # button8 = types.InlineKeyboardButton('Всё время', callback_data='all')
     # button9 = types.InlineKeyboardButton('Другое', callback_data='other')
     keyboard.add(button1, button2, button3, button4, button5, button6, button7)
-    bot.send_message(message.chat.id, "За какой период вы хотите узнать доход?", reply_markup=keyboard)
+    response = bot.send_message(message.chat.id, "За какой период вы хотите узнать доход?", reply_markup=keyboard)
+    message_id_inline = response.message_id
 
 
 @bot.message_handler(func=lambda message: "узнать" in message.text.lower() and "расход" in message.text.lower())
 def find_expense(message):
     """Пользователь нажал кнопку узнать расход"""
-    global pre_com
-    pre_com = "Узнать расход"
+    global pre_com, message_id_inline, state_message
+    if state_message:
+        bot.delete_message(message.chat.id, message_id_inline)
+    bot.delete_message(message.chat.id, message.message_id)
     keyboard = types.InlineKeyboardMarkup(row_width=3)
     # i - expense, цифра - это количество дней
     button1 = types.InlineKeyboardButton('Сегодня', callback_data='e0')
@@ -89,20 +94,27 @@ def find_expense(message):
     # button8 = types.InlineKeyboardButton('Всё время', callback_data='all')
     # button9 = types.InlineKeyboardButton('Другое', callback_data='other')
     keyboard.add(button1, button2, button3, button4, button5, button6, button7)
-    bot.send_message(message.chat.id, "За какой период вы хотите узнать расход?", reply_markup=keyboard)
+    response = bot.send_message(message.chat.id, "За какой период вы хотите узнать расход?", reply_markup=keyboard)
+    message_id_inline = response.message_id
 
 
 @bot.message_handler(func=lambda message: re.compile(r'\b\w*доход\w*\b').search(message.text.lower()))
 def button_income(message):
-    global pre_com
+    global pre_com, message_id_inline, state_message
+    if state_message:
+        bot.delete_message(message.chat.id, message_id_inline)
     pre_com = 'Доход'
-    bot.send_message(message.chat.id, "Сколько вы заработали?")
+    bot.delete_message(message.chat.id, message.message_id)
+    response = bot.send_message(message.chat.id, 'Сколько вы заработали?')
+    message_id_inline = response.message_id
 
 
 @bot.message_handler(func=lambda message: re.compile(r'\b\w*расход\w*\b').search(message.text.lower()))
 def button_income(message):
     """Пользователь нажал кнопку Расхода"""
-    global pre_com
+    global pre_com, message_id_inline, state_message
+    if state_message:
+        bot.delete_message(message.chat.id, message_id_inline)
     pre_com = 'Расход'
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     button1 = types.InlineKeyboardButton('Питание', callback_data='Питание')
@@ -115,16 +127,16 @@ def button_income(message):
     button8 = types.InlineKeyboardButton('Другое', callback_data='Другое')
     keyboard.add(button1, button2, button3, button4, button5, button6, button7, button8)
     bot.send_message(message.chat.id, "К какой категории относится данный расход?", reply_markup=keyboard)
+    message_id_inline = message.message_id
 
 
 @bot.message_handler(func=lambda message: True)
 def button(message):
-    global states
-    global pre_com
+    global states, pre_com, message_id_inline, state_message
     # Предполагается, что пользователь нажал кнопку из обычной клавиатуры
     states = 'BUTTON_MAIN'
-
     try:
+
         money = float(message.text)
 
         if pre_com == 'Доход':
@@ -133,8 +145,10 @@ def button(message):
                 cursor.execute("INSERT INTO Income (user_id, income_amount, income_date) "
                                "VALUES (?, ?, STRFTIME('%Y-%m-%d', datetime('now')));",
                                (message.from_user.id, money))
-
-            bot.send_message(message.chat.id, "Доход успешно добавлен.")
+            bot.delete_message(message.chat.id, message.message_id)
+            bot.edit_message_text(chat_id=message.chat.id, message_id=message_id_inline,
+                                  text='Доход успешно добавлен.')
+            state_message = True
 
         elif pre_com == 'Расход':
             with sqlite3.connect('data.db') as cursor:
@@ -142,8 +156,10 @@ def button(message):
                 cursor.execute("INSERT INTO Expenses (user_id, expense_amount, expense_date, expense_type)"
                                " VALUES (?, ?, STRFTIME('%Y-%m-%d', datetime('now')), ?);",
                                (message.from_user.id, money, type_expenses))
-
-            bot.send_message(message.chat.id, "Расход успешно добавлен.")
+            bot.delete_message(message.chat.id, message.message_id)
+            bot.edit_message_text(chat_id=message.chat.id, message_id=message_id_inline,
+                                  text='Расход успешно добавлен.')
+            state_message = True
 
     except ValueError:
         bot.send_message(message.chat.id, 'Вы неправильно ввели число.\nПожалуйста, следуйте инструкции :)')
@@ -153,16 +169,19 @@ def button(message):
                                                                   'Образование', 'Квартплата', 'Спорт', 'Транспорт'))
 def button_inline_type_expense(message):
     """Пользователь нажал кнопку типа расхода"""
-    global states, type_expenses
+    global states, type_expenses, message_id_inline
     # Пользователь нажал кнопку INLINE клавиатуры
-    # bot.delete_message(message.message.chat.id, message_id_inline)
     states = 'INLINE'
     type_expenses = message.data
-    bot.send_message(message.message.chat.id, 'Сколько вы потратили?')
+    bot.delete_message(message.message.chat.id, message_id_inline)
+    bot.edit_message_text(chat_id=message.message.chat.id, message_id=message.message.message_id,
+                          text='Сколько вы потратили?')
+    message_id_inline = message.message.message_id
 
 
 @bot.callback_query_handler(func=lambda message: message.data in ('i365', 'i183', 'i91', 'i30', 'i7', 'i1', 'i0'))
 def button_inline_time(message):
+    global state_message
     """Пользователь нажал кнопку периода доходов"""
     with sqlite3.connect('data.db') as cursor:
         commands = """
@@ -175,13 +194,15 @@ def button_inline_time(message):
         column_values = result.fetchall()
         # Если есть расходы за указанный период
         if column_values:
-            bot.send_message(message.message.chat.id, f'{column_values}')
+            bot.edit_message_text(f'{column_values}', message.message.chat.id, message_id_inline)
         else:
-            bot.send_message(message.message.chat.id, 'У вас нет доходов за данный период')
+            bot.edit_message_text('У вас нет доходов за данный период', message.message.chat.id, message_id_inline)
+        state_message = True
 
 
 @bot.callback_query_handler(func=lambda message: message.data in ('e365', 'e183', 'e91', 'e30', 'e7', 'e1', 'e0'))
 def button_expense_time(message):
+    global state_message
     """Пользователь нажал кнопку периода расходов"""
     with sqlite3.connect('data.db') as cursor:
         commands = """
@@ -195,9 +216,10 @@ def button_expense_time(message):
         column_values = result.fetchall()
         # Если есть расходы за указанный период
         if column_values:
-            bot.send_message(message.message.chat.id, f'{column_values}')
+            bot.edit_message_text(f'{column_values}', message.message.chat.id, message_id_inline)
         else:
-            bot.send_message(message.message.chat.id, 'У вас нет расходов за данный период')
+            bot.edit_message_text('У вас нет расходов за данный период', message.message.chat.id, message_id_inline)
+        state_message = True
 
 
 def create_tables():
