@@ -3,6 +3,7 @@ import openai
 from telebot import types
 import sqlite3
 import re
+import pandas as pd
 
 # Состояния пользователя
 states = None
@@ -107,6 +108,7 @@ def button_income(message):
     bot.delete_message(message.chat.id, message.message_id)
     response = bot.send_message(message.chat.id, 'Сколько вы заработали?')
     message_id_inline = response.message_id
+    state_message = True
 
 
 @bot.message_handler(func=lambda message: re.compile(r'\b\w*расход\w*\b').search(message.text.lower()))
@@ -115,6 +117,7 @@ def button_income(message):
     global pre_com, message_id_inline, state_message
     if state_message:
         bot.delete_message(message.chat.id, message_id_inline)
+    bot.delete_message(message.chat.id, message.message_id)
     pre_com = 'Расход'
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     button1 = types.InlineKeyboardButton('Питание', callback_data='Питание')
@@ -126,7 +129,7 @@ def button_income(message):
     button7 = types.InlineKeyboardButton('Развлечения', callback_data='Развлечения')
     button8 = types.InlineKeyboardButton('Другое', callback_data='Другое')
     keyboard.add(button1, button2, button3, button4, button5, button6, button7, button8)
-    bot.send_message(message.chat.id, "К какой категории относится данный расход?", reply_markup=keyboard)
+    response = bot.send_message(message.chat.id, "К какой категории относится данный расход?", reply_markup=keyboard)
     message_id_inline = message.message_id
 
 
@@ -136,9 +139,9 @@ def button(message):
     # Предполагается, что пользователь нажал кнопку из обычной клавиатуры
     states = 'BUTTON_MAIN'
     try:
-
         money = float(message.text)
-
+        if not money:
+            raise ValueError
         if pre_com == 'Доход':
             with sqlite3.connect('data.db') as cursor:
 
@@ -162,7 +165,10 @@ def button(message):
             state_message = True
 
     except ValueError:
-        bot.send_message(message.chat.id, 'Вы неправильно ввели число.\nПожалуйста, следуйте инструкции :)')
+        bot.delete_message(message.chat.id, message.message_id)
+        response = bot.send_message(message.chat.id, 'Вы неправильно ввели число.\nПожалуйста, следуйте инструкции :)')
+        state_message = True
+        message_id_inline = response.message_id
 
 
 @bot.callback_query_handler(func=lambda message: message.data in ('Питание', 'Одежда', 'Другое', 'Развлечения',
@@ -194,7 +200,8 @@ def button_inline_time(message):
         column_values = result.fetchall()
         # Если есть расходы за указанный период
         if column_values:
-            bot.edit_message_text(f'{column_values}', message.message.chat.id, message_id_inline)
+            table = pd.DataFrame(column_values, columns=['Сумма', 'Дата'])
+            bot.edit_message_text(f'{table}', message.message.chat.id, message_id_inline)
         else:
             bot.edit_message_text('У вас нет доходов за данный период', message.message.chat.id, message_id_inline)
         state_message = True
@@ -216,7 +223,8 @@ def button_expense_time(message):
         column_values = result.fetchall()
         # Если есть расходы за указанный период
         if column_values:
-            bot.edit_message_text(f'{column_values}', message.message.chat.id, message_id_inline)
+            table = pd.DataFrame(column_values, columns=['Сумма', 'Тип расхода', 'Дата'])
+            bot.edit_message_text(f'{table}', message.message.chat.id, message_id_inline)
         else:
             bot.edit_message_text('У вас нет расходов за данный период', message.message.chat.id, message_id_inline)
         state_message = True
