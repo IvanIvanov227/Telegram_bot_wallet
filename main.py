@@ -20,23 +20,30 @@ button1 = types.InlineKeyboardButton('Доход', callback_data='income')
 button2 = types.InlineKeyboardButton('Расход', callback_data='expense')
 button3 = types.InlineKeyboardButton('Узнать расход', callback_data='find_exp')
 button4 = types.InlineKeyboardButton('Узнать доход', callback_data='find_inc')
-keyboard.add(button1, button2, button3, button4)
+button5 = types.InlineKeyboardButton('Отменить расход', callback_data='cancel_exp')
+button6 = types.InlineKeyboardButton('Отменить доход', callback_data='cancel_inc')
+keyboard.add(button1, button2, button3, button4, button5, button6)
 
 
 # Команда "/start"
 @bot.message_handler(commands=['start'])
-def main(message):
-    bot.send_message(message.chat.id, """
+def start(message):
+    global message_id_inline
+    com = """
     Привет!\n
-    Это бот, который умеет запоминать твои расходы и доходы, классифицировать их и создавать график по твоим расходам и
-доходам, а также предлагать советы по улучшению расходов.\n
+    Это бот, который умеет запоминать твои расходы и доходы, а также предлагать советы по финансовой грамотности.\n
     Если хочешь добавить свои расходы, то нажми на кнопку <u><b>Доход</b></u> и сумму.\n
     Если хочешь добавить свои доходы, то нажми на кнопку <u><b>Расход</b></u>, его тип и сумму.\n
     Если хочешь посмотреть свои расходы, то нажми на кнопку <u><b>Узнать расход</b></u>.\n
     Если хочешь посмотреть свои доходы, то нажми на кнопку <u><b>Узнать Доход</b></u>.\n
-    """, parse_mode='html')
-    bot.send_message(message.chat.id, 'Что вы хотите выбрать?', reply_markup=keyboard)
-
+    Если хочешь отменить добавленный <u>доход</u>, то нажми <u><b>Отменить доход</b></u>. 
+    <b>(только учти, что удаляется самый последний добавленный доход)</b>.\n
+    Если хочешь отменить добавленный <u>расход</u>, то нажми <u><b>Отменить расход</b></u>.\n
+    Для более подробной информации о боте нажмите /help.
+    """
+    bot.send_message(message.chat.id, com, parse_mode='html')
+    response = bot.send_message(message.chat.id, 'Что вы хотите выбрать?', reply_markup=keyboard)
+    message_id_inline = response.message_id
     # Проверяем, есть ли пользователь в нашей БД
     with sqlite3.connect('data.db') as cursor:
         commands = """
@@ -48,6 +55,34 @@ def main(message):
                         INSERT INTO Users (user_id) VALUES (?);
                     """
             cursor.execute(command, (message.from_user.id,))
+
+
+@bot.message_handler(commands=['help'])
+def helping(message):
+    global message_id_inline
+    com = """
+    Я умею запоминать ваши доходы и расходы, выбирать их за определённый период времени, а также давать советы по
+финансовой грамотности, исходя из ваших трат и заработков.\n
+    Если хочешь добавить свои расходы, то нажми на кнопку <u><b>Доход</b></u>.\n
+    Если хочешь добавить свои доходы, то нажми на кнопку <u><b>Расход</b></u>.\n
+    Если хочешь посмотреть свои расходы, то нажми на кнопку <u><b>Узнать расход</b></u>.\n
+    Если хочешь посмотреть свои доходы, то нажми на кнопку <u><b>Узнать доход</b></u>.\n
+    Если хочешь отменить добавленный <u>доход</u>, то нажми <u><b>Отменить доход</b></u>. 
+    <b>(только учти, что удаляется самый последний добавленный доход)</b>.\n
+    Если хочешь отменить добавленный <u>расход</u>, то нажми <u><b>Отменить расход</b></u>. 
+    """
+    bot.delete_message(message.chat.id, message.message_id)
+    try:
+        edit_message(com, message.chat.id, markup=True, parse=True)
+    except telebot.apihelper.ApiTelegramException:
+        pass
+
+
+def edit_message(com, chat, markup=False, parse=False):
+    global message_id_inline
+    response = bot.edit_message_text(com, chat, message_id_inline, reply_markup=keyboard if markup else None,
+                                     parse_mode='html' if parse else None)
+    message_id_inline = response.message_id
 
 
 @bot.message_handler(func=lambda message: pre_com in ('Доход', 'Расход'))
@@ -71,16 +106,14 @@ def counting_money(message):
                 except ValueError:
                     pass
         if type(money) == str:
-            error = 'Извините, я не умею отвечать на простые сообщения.\nПожалуйста, следуйте инструкции ^_^\n'
+            error = 'Пожалуйста, следуйте инструкции.\nЕсли вам что-то непонятно, то напишите /help\n'
             raise ValueError
         elif not money:
             error = 'Ноль не считается :)'
             raise ValueError
     except ValueError:
         bot.delete_message(message.chat.id, message.message_id)
-        response = bot.edit_message_text(f'{error}\nЧто вы хотите выбрать?', message.chat.id,
-                                         message_id_inline, reply_markup=keyboard)
-        message_id_inline = response.message_id
+        edit_message(f'{error}\nЧто вы хотите выбрать?', message.chat.id, markup=True)
     else:
         if pre_com == 'Доход':
             insert_income(message, money)
@@ -103,33 +136,30 @@ def time_period(message):
                         """
             else:
                 commands = """
-                             SELECT Expenses.expense_amount, Expenses.expense_type, Expenses.expense_date FROM Users INNER JOIN Expenses
+                             SELECT Expenses.expense_amount, Expenses.expense_type, Expenses.expense_date
+                              FROM Users INNER JOIN Expenses
                              ON Users.user_id = Expenses.user_id
                              WHERE Users.user_id = (?) AND
                              expense_date = (?);
                         """
             result = cursor.execute(commands, (message.from_user.id, message.text))
             column_values = result.fetchall()
-            # Если есть расходы за указанный период
             if column_values:
-                rows = [
-                    ["Сумма", "Дата"]
-                ]
+                if pre_com == 'otheri':
+                    rows = [["Сумма", "Дата"]]
+                else:
+                    rows = [["Сумма", "Тип расхода", "Дата"]]
                 for column_value in column_values:
                     rows.append([f'{column_value[0]} руб.', column_value[1]])
                 table = tabulate(rows, headers="firstrow")
-                response = bot.edit_message_text(f'{table}\n\nЧто вы хотите выбрать?', message.chat.id,
-                                                 message_id_inline, reply_markup=keyboard)
+                edit_message(f'{table}\n\nЧто вы хотите выбрать?', message.chat.id, markup=True)
             else:
-                response = bot.edit_message_text(f'У вас нет {"доходов" if pre_com == "otheri" else "расходов"}'
-                                                 f' за данный период.\nЧто вы хотите выбрать?',
-                                                 message.chat.id, message_id_inline, reply_markup=keyboard)
-            message_id_inline = response.message_id
+                edit_message(f'У вас нет {"доходов" if pre_com == "otheri" else "расходов"}'
+                             f' за данный период.\nЧто вы хотите выбрать?', message.chat.id, markup=True)
+
     else:
         try:
-            response = bot.edit_message_text('Пожалуйста, введите дату, в формате YYYY-MM-DD', message.chat.id,
-                                             message_id_inline)
-            message_id_inline = response.message_id
+            edit_message('Пожалуйста, введите дату, в формате YYYY-MM-DD', message.chat.id)
         except telebot.apihelper.ApiTelegramException:
             pass
     bot.delete_message(message.chat.id, message.message_id)
@@ -139,9 +169,8 @@ def time_period(message):
 def other_type_expense(message):
     global type_expenses, message_id_inline, pre_com
     bot.delete_message(message.chat.id, message.message_id)
-    response = bot.edit_message_text('Сколько рублей вы потратили?', message.chat.id, message_id_inline)
-    type_expenses = message.text
-    message_id_inline = response.message_id
+    edit_message('Сколько рублей вы потратили?', message.chat.id)
+    type_expenses = message.text[:26]
     pre_com = 'Расход'
 
 
@@ -167,6 +196,35 @@ def insert_expense(message, money):
     response = bot.edit_message_text(chat_id=message.chat.id, message_id=message_id_inline,
                                      text='Расход успешно добавлен.\nЧто вы хотите выбрать?', reply_markup=keyboard)
     message_id_inline = response.message_id
+
+
+@bot.callback_query_handler(func=lambda message: message.data in ('cancel_inc', 'cancel_exp'))
+def cancel_income(message):
+    global message_id_inline
+    with sqlite3.connect('data.db') as cursor:
+        if message.data == 'cancel_inc':
+            commands = """
+                 DELETE FROM Income
+                 WHERE Income.user_id = (?) AND
+                 income_id = (SELECT MAX(income_id) FROM Income);
+            """
+        else:
+            commands = """
+                 DELETE FROM Expenses
+                 WHERE Expenses.user_id = (?) AND
+                 expense_id = (SELECT MAX(expense_id) FROM Expenses);
+            """
+        cursor.execute(commands, (message.from_user.id, ))
+        result = cursor.execute('SELECT CHANGES();').fetchone()
+        if result[0]:
+            com = f'Последний {"расход" if message.data == "cancel_exp" else "доход"} успешно удалён.'
+        else:
+            com = f'{"Доходов" if message.data == "cancel_exp" else "Расходов"} больше не осталось.'
+        try:
+            response = bot.edit_message_text(com, message.message.chat.id, message_id_inline, reply_markup=keyboard)
+            message_id_inline = response.message_id
+        except telebot.apihelper.ApiTelegramException:
+            pass
 
 
 @bot.callback_query_handler(func=lambda message: message.data == 'income')
@@ -251,7 +309,8 @@ def button_inline_other(message):
     global pre_com, type_expenses, message_id_inline
     pre_com = 'Другое'
     response = bot.edit_message_text(chat_id=message.message.chat.id, message_id=message.message.message_id,
-                                     text='Уточните, пожалуйста, тип расхода')
+                                     text='Уточните, пожалуйста, тип расхода.\nДо <b>25</b> символов.',
+                                     parse_mode='html')
     message_id_inline = response.message_id
 
 
@@ -281,7 +340,7 @@ def button_inline_time(message):
                 ["Сумма", "Дата"]
             ]
             for column_value in column_values:
-                rows.append([f'{column_value[0]} рубл.', column_value[1]])
+                rows.append([f'{column_value[0]} руб.', column_value[1]])
             table = tabulate(rows, headers="firstrow")
             bot.edit_message_text(f'{table}\n\nЧто вы хотите выбрать?', message.message.chat.id, message_id_inline,
                                   reply_markup=keyboard)
@@ -297,7 +356,8 @@ def button_expense_time(message):
     with sqlite3.connect('data.db') as cursor:
         if message.data != 'eall':
             commands = """
-                 SELECT Expenses.expense_amount, Expenses.expense_type, Expenses.expense_date FROM Users INNER JOIN Expenses
+                 SELECT Expenses.expense_amount, Expenses.expense_type, Expenses.expense_date 
+                 FROM Users INNER JOIN Expenses
                  ON Users.user_id = Expenses.user_id
                  WHERE Users.user_id = (?) AND
                  CAST(JULIANDAY(STRFTIME('%Y-%m-%d', datetime('now'))) - JULIANDAY(expense_date) AS INTEGER) = (?);
@@ -305,7 +365,8 @@ def button_expense_time(message):
             result = cursor.execute(commands, (message.from_user.id, int(message.data[1:])))
         else:
             commands = """
-                SELECT Expenses.expense_amount, Expenses.expense_type, Expenses.expense_date FROM Users INNER JOIN Expenses
+                SELECT Expenses.expense_amount, Expenses.expense_type, Expenses.expense_date 
+                FROM Users INNER JOIN Expenses
                 ON Users.user_id = Expenses.user_id
                 WHERE Users.user_id = (?);
             """
@@ -317,7 +378,7 @@ def button_expense_time(message):
                 ["Сумма", "Тип расхода", "Дата"]
             ]
             for column_value in column_values:
-                rows.append([f'{column_value[0]} рубл.', column_value[1], column_value[2]])
+                rows.append([f'{column_value[0]} руб.', column_value[1], column_value[2]])
             table = tabulate(rows, headers="firstrow")
             bot.edit_message_text(f'{table}\n\nЧто вы хотите выбрать?', message.message.chat.id, message_id_inline,
                                   reply_markup=keyboard)
@@ -331,7 +392,7 @@ def button_find_expense_other(message):
     global pre_com, message_id_inline
     pre_com = 'othere'
     response = bot.edit_message_text('Уточните, пожалуйста, за какую дату вы хотите узнать расход?\n'
-                          'Вводите дату в формате YYYY-MM-DD', message.message.chat.id, message_id_inline)
+                                     'Вводите дату в формате YYYY-MM-DD', message.message.chat.id, message_id_inline)
     message_id_inline = response.message_id
 
 
