@@ -61,7 +61,7 @@ def start(message):
 def helping(message):
     global message_id_inline
     com = """
-    Я умею запоминать ваши доходы и расходы, выбирать их за определённый период времени, а также давать советы по
+        Я умею запоминать ваши доходы и расходы, выбирать их за определённый период времени, а также давать советы по
 финансовой грамотности, исходя из ваших трат и заработков.\n
     Если хочешь добавить свои расходы, то нажми на кнопку <u><b>Доход</b></u>.\n
     Если хочешь добавить свои доходы, то нажми на кнопку <u><b>Расход</b></u>.\n
@@ -73,21 +73,22 @@ def helping(message):
     """
     bot.delete_message(message.chat.id, message.message_id)
     try:
-        edit_message(com, message.chat.id, markup=True, parse=True)
+        edit_message(com, message.chat.id, markup=True, parse='html')
     except telebot.apihelper.ApiTelegramException:
         pass
 
 
-def edit_message(com, chat, markup=False, parse=False):
+def edit_message(com, chat, markup=None, parse=None):
     global message_id_inline
-    response = bot.edit_message_text(com, chat, message_id_inline, reply_markup=keyboard if markup else None,
-                                     parse_mode='html' if parse else None)
+    if markup is True:
+        markup = keyboard
+    response = bot.edit_message_text(com, chat, message_id_inline, reply_markup=markup,
+                                     parse_mode=parse)
     message_id_inline = response.message_id
 
 
 @bot.message_handler(func=lambda message: pre_com in ('Доход', 'Расход'))
 def counting_money(message):
-    global message_id_inline
     money = message.text
     error = ''
     try:
@@ -123,7 +124,6 @@ def counting_money(message):
 
 @bot.message_handler(func=lambda message: pre_com in ('othere', 'otheri'))
 def time_period(message):
-    global message_id_inline
     pattern = r"^\d{4}-\d{2}-\d{2}$"
     if re.match(pattern, message.text):
         with sqlite3.connect('data.db') as cursor:
@@ -167,40 +167,43 @@ def time_period(message):
 
 @bot.message_handler(func=lambda message: pre_com == 'Другое')
 def other_type_expense(message):
-    global type_expenses, message_id_inline, pre_com
+    global type_expenses, pre_com
     bot.delete_message(message.chat.id, message.message_id)
     edit_message('Сколько рублей вы потратили?', message.chat.id)
     type_expenses = message.text[:26]
     pre_com = 'Расход'
 
 
+@bot.message_handler(func=lambda message: True)
+def other_message(message):
+    global pre_com
+    if pre_com == 'MESSAGE':
+        bot.delete_message(message.chat.id, message.message_id)
+        edit_message('Пожалуйста, пишите сообщения только тогда, когда вас просят :)', message.chat.id, markup=True)
+
+
 def insert_income(message, money):
-    global message_id_inline
     with sqlite3.connect('data.db') as cursor:
         cursor.execute("INSERT INTO Income (user_id, income_amount, income_date) "
                        "VALUES (?, ?, STRFTIME('%Y-%m-%d', datetime('now')));",
                        (message.from_user.id, money))
     bot.delete_message(message.chat.id, message.message_id)
-    response = bot.edit_message_text(chat_id=message.chat.id, message_id=message_id_inline,
-                                     text='Доход успешно добавлен.\nЧто вы хотите выбрать?', reply_markup=keyboard)
-    message_id_inline = response.message_id
+    edit_message('Доход успешно добавлен.\nЧто вы хотите выбрать?', message.chat.id, markup=True)
 
 
 def insert_expense(message, money):
-    global message_id_inline
     with sqlite3.connect('data.db') as cursor:
         cursor.execute("INSERT INTO Expenses (user_id, expense_amount, expense_date, expense_type)"
                        " VALUES (?, ?, STRFTIME('%Y-%m-%d', datetime('now')), ?);",
                        (message.from_user.id, money, type_expenses))
     bot.delete_message(message.chat.id, message.message_id)
-    response = bot.edit_message_text(chat_id=message.chat.id, message_id=message_id_inline,
-                                     text='Расход успешно добавлен.\nЧто вы хотите выбрать?', reply_markup=keyboard)
-    message_id_inline = response.message_id
+    edit_message('Расход успешно добавлен.\nЧто вы хотите выбрать?', message.chat.id, markup=True)
 
 
 @bot.callback_query_handler(func=lambda message: message.data in ('cancel_inc', 'cancel_exp'))
 def cancel_income(message):
-    global message_id_inline
+    global pre_com
+    pre_com = 'MESSAGE'
     with sqlite3.connect('data.db') as cursor:
         if message.data == 'cancel_inc':
             commands = """
@@ -221,23 +224,22 @@ def cancel_income(message):
         else:
             com = f'{"Доходов" if message.data == "cancel_exp" else "Расходов"} больше не осталось.'
         try:
-            response = bot.edit_message_text(com, message.message.chat.id, message_id_inline, reply_markup=keyboard)
-            message_id_inline = response.message_id
+            edit_message(com, message.message.chat.id, markup=True)
         except telebot.apihelper.ApiTelegramException:
             pass
 
 
 @bot.callback_query_handler(func=lambda message: message.data == 'income')
 def income(message):
-    global pre_com, message_id_inline
+    global pre_com
     pre_com = 'Доход'
-    response = bot.edit_message_text('Сколько рублей вы заработали?', message.message.chat.id,
-                                     message.message.message_id)
-    message_id_inline = response.message_id
+    edit_message('Сколько рублей вы заработали?', message.message.chat.id)
 
 
 @bot.callback_query_handler(func=lambda message: message.data == 'expense')
 def expense(message):
+    global pre_com
+    pre_com = 'MESSAGE'
     keyboard_exp = types.InlineKeyboardMarkup(row_width=2)
     button_in1 = types.InlineKeyboardButton('Питание', callback_data='Питание')
     button_in2 = types.InlineKeyboardButton('Одежда', callback_data='Одежда')
@@ -254,7 +256,8 @@ def expense(message):
 
 @bot.callback_query_handler(func=lambda message: message.data == 'find_inc')
 def find_income(message):
-    global message_id_inline
+    global pre_com
+    pre_com = 'MESSAGE'
     keyboard_ = types.InlineKeyboardMarkup(row_width=3)
     but1 = types.InlineKeyboardButton('Сегодня', callback_data='i0')
     but2 = types.InlineKeyboardButton('Вчера', callback_data='i1')
@@ -266,16 +269,14 @@ def find_income(message):
     but8 = types.InlineKeyboardButton('Всё время', callback_data='iall')
     but9 = types.InlineKeyboardButton('Другое', callback_data='otheri')
     keyboard_.add(but1, but2, but3, but4, but5, but6, but7, but8, but9)
-    response = bot.edit_message_text("За какой период вы хотите узнать доход?", message.message.chat.id,
-                                     message.message.message_id, reply_markup=keyboard_)
-    message_id_inline = response.message_id
+    edit_message("За какой период вы хотите узнать доход?", message.message.chat.id, markup=keyboard_)
 
 
 @bot.callback_query_handler(func=lambda message: message.data == 'find_exp')
 def find_expense(message):
-    global message_id_inline
+    global pre_com
+    pre_com = 'MESSAGE'
     keyboard_ = types.InlineKeyboardMarkup(row_width=3)
-    # i - expense, цифра - это количество дней
     but1 = types.InlineKeyboardButton('Сегодня', callback_data='e0')
     but2 = types.InlineKeyboardButton('Вчера', callback_data='e1')
     but3 = types.InlineKeyboardButton('Неделю', callback_data='e7')
@@ -286,32 +287,25 @@ def find_expense(message):
     but8 = types.InlineKeyboardButton('Всё время', callback_data='eall')
     but9 = types.InlineKeyboardButton('Другое', callback_data='othere')
     keyboard_.add(but1, but2, but3, but4, but5, but6, but7, but8, but9)
-    response = bot.edit_message_text("За какой период вы хотите узнать расход?", message.message.chat.id,
-                                     message.message.message_id, reply_markup=keyboard_)
-    message_id_inline = response.message_id
+    edit_message("За какой период вы хотите узнать расход?", message.message.chat.id, markup=keyboard_)
 
 
 @bot.callback_query_handler(func=lambda message: message.data in ('Питание', 'Одежда', 'Развлечения',
                                                                   'Образование', 'Квартплата', 'Спорт', 'Транспорт'))
 def button_inline_type_expense(message):
     """Пользователь нажал кнопку типа расхода"""
-    global pre_com, type_expenses, message_id_inline
+    global pre_com, type_expenses
     pre_com = 'Расход'
     type_expenses = message.data
-    response = bot.edit_message_text(chat_id=message.message.chat.id, message_id=message.message.message_id,
-                                     text='Сколько рублей вы потратили?')
-    message_id_inline = response.message_id
+    edit_message('Сколько рублей вы потратили?', message.message.chat.id)
 
 
 @bot.callback_query_handler(func=lambda message: message.data == 'Другое')
 def button_inline_other(message):
     """Пользователь нажал на кнопку типа расхода Другое"""
-    global pre_com, type_expenses, message_id_inline
+    global pre_com, type_expenses
     pre_com = 'Другое'
-    response = bot.edit_message_text(chat_id=message.message.chat.id, message_id=message.message.message_id,
-                                     text='Уточните, пожалуйста, тип расхода.\nДо <b>25</b> символов.',
-                                     parse_mode='html')
-    message_id_inline = response.message_id
+    edit_message('Уточните, пожалуйста, тип расхода.\nДо <b>25</b> символов.', message.message.chat.id, parse='html')
 
 
 @bot.callback_query_handler(func=lambda message: message.data[0] == 'i')
@@ -387,22 +381,13 @@ def button_expense_time(message):
                                   message.message.chat.id, message_id_inline, reply_markup=keyboard)
 
 
-@bot.callback_query_handler(func=lambda message: message.data == 'othere')
-def button_find_expense_other(message):
-    global pre_com, message_id_inline
-    pre_com = 'othere'
-    response = bot.edit_message_text('Уточните, пожалуйста, за какую дату вы хотите узнать расход?\n'
-                                     'Вводите дату в формате YYYY-MM-DD', message.message.chat.id, message_id_inline)
-    message_id_inline = response.message_id
-
-
-@bot.callback_query_handler(func=lambda message: message.data == 'otheri')
-def button_find_expense_other(message):
-    global pre_com, message_id_inline
-    pre_com = 'otheri'
-    response = bot.edit_message_text('Уточните, пожалуйста, за какую дату вы хотите узнать доход?\n'
-                                     'Вводите дату в формате YYYY-MM-DD', message.message.chat.id, message_id_inline)
-    message_id_inline = response.message_id
+@bot.callback_query_handler(func=lambda message: message.data in ('othere', 'otheri'))
+def button_find_expense_or_income_other(message):
+    global pre_com
+    pre_com = message.data
+    com = f'Уточните, пожалуйста, за какую дату вы хотите узнать {"расход" if message.data == "othere" else "доход"}?\n' \
+          f'Вводите дату в формате YYYY-MM-DD'
+    edit_message(com, message.message.chat.id)
 
 
 def create_tables():
