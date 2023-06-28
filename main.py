@@ -9,12 +9,15 @@ from tabulate import tabulate
 pre_com = None
 # Тип расхода
 type_expenses = None
+# id предыдущего сообщения бота
 message_id_inline = None
+start_message = True
 bot = telebot.TeleBot('6289799568:AAFArEfu7yepVGeseGNzwEdAC8F44H2Aiak')
 openai_token = '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'
 channel_id = '123'
 openai.api_key = openai_token
 
+# Основная клавиатура
 keyboard = types.InlineKeyboardMarkup(row_width=2)
 button1 = types.InlineKeyboardButton('Доход', callback_data='income')
 button2 = types.InlineKeyboardButton('Расход', callback_data='expense')
@@ -28,7 +31,7 @@ keyboard.add(button1, button2, button3, button4, button5, button6)
 # Команда "/start"
 @bot.message_handler(commands=['start'])
 def start(message):
-    global message_id_inline
+    global message_id_inline, start_message
     com = """
     Привет!\n
     Это бот, который умеет запоминать твои расходы и доходы, а также предлагать советы по финансовой грамотности.\n
@@ -41,22 +44,27 @@ def start(message):
     Если хочешь отменить добавленный <u>расход</u>, то нажми <u><b>Отменить расход</b></u>.\n
     Для более подробной информации о боте нажмите /help.
     """
-    bot.send_message(message.chat.id, com, parse_mode='html')
-    response = bot.send_message(message.chat.id, 'Что вы хотите выбрать?', reply_markup=keyboard)
-    message_id_inline = response.message_id
-    # Проверяем, есть ли пользователь в нашей БД
-    with sqlite3.connect('data.db') as cursor:
-        commands = """
-                SELECT user_id FROM Users;
-        """
-        result = [row[0] for row in cursor.execute(commands).fetchall()]
-        if message.from_user.id not in result:
-            command = """
-                        INSERT INTO Users (user_id) VALUES (?);
-                    """
-            cursor.execute(command, (message.from_user.id,))
+    if start_message:
+        start_message = False
+        bot.send_message(message.chat.id, com, parse_mode='html')
+        response = bot.send_message(message.chat.id, 'Что вы хотите выбрать?', reply_markup=keyboard)
+        message_id_inline = response.message_id
+        # Проверяем, есть ли пользователь в нашей БД
+        with sqlite3.connect('data.db') as cursor:
+            commands = """
+                    SELECT user_id FROM Users;
+            """
+            result = [row[0] for row in cursor.execute(commands).fetchall()]
+            if message.from_user.id not in result:
+                command = """
+                            INSERT INTO Users (user_id) VALUES (?);
+                        """
+                cursor.execute(command, (message.from_user.id,))
+    else:
+        bot.delete_message(message.chat.id, message.message_id)
 
 
+# Команда /help
 @bot.message_handler(commands=['help'])
 def helping(message):
     global message_id_inline
@@ -79,6 +87,7 @@ def helping(message):
 
 
 def edit_message(com, chat, markup=None, parse=None):
+    """Функция заменяет сообщение и обновляет значение message_id_inline"""
     global message_id_inline
     if markup is True:
         markup = keyboard
@@ -89,23 +98,18 @@ def edit_message(com, chat, markup=None, parse=None):
 
 @bot.message_handler(func=lambda message: pre_com in ('Доход', 'Расход'))
 def counting_money(message):
+    """Пользователь написал сумму"""
     money = message.text
     error = ''
     try:
-        if 'рубл' in money:
-            for i in money.split():
-                try:
-                    money = float(i)
-                    break
-                except ValueError:
-                    pass
-        else:
-            for i in money.split():
-                try:
-                    money = float(i)
-                    break
-                except ValueError:
-                    pass
+        # Проверяем, если user написал сумму где-то в предложении
+        for i in money.split():
+            try:
+                money = float(i)
+                break
+            except ValueError:
+                pass
+        # Если в предложении есть сумма
         if type(money) == str:
             error = 'Пожалуйста, следуйте инструкции.\nЕсли вам что-то непонятно, то напишите /help\n'
             raise ValueError
@@ -124,6 +128,7 @@ def counting_money(message):
 
 @bot.message_handler(func=lambda message: pre_com in ('othere', 'otheri'))
 def time_period(message):
+    """User ввёл дату"""
     pattern = r"^\d{4}-\d{2}-\d{2}$"
     if re.match(pattern, message.text):
         with sqlite3.connect('data.db') as cursor:
@@ -167,6 +172,7 @@ def time_period(message):
 
 @bot.message_handler(func=lambda message: pre_com == 'Другое')
 def other_type_expense(message):
+    """User ввёл тип расхода"""
     global type_expenses, pre_com
     bot.delete_message(message.chat.id, message.message_id)
     edit_message('Сколько рублей вы потратили?', message.chat.id)
@@ -176,6 +182,7 @@ def other_type_expense(message):
 
 @bot.message_handler(func=lambda message: True)
 def other_message(message):
+    """Все остальные сообщения"""
     global pre_com
     if pre_com == 'MESSAGE':
         bot.delete_message(message.chat.id, message.message_id)
@@ -183,6 +190,7 @@ def other_message(message):
 
 
 def insert_income(message, money):
+    """Добавляет доход в таблицу"""
     with sqlite3.connect('data.db') as cursor:
         cursor.execute("INSERT INTO Income (user_id, income_amount, income_date) "
                        "VALUES (?, ?, STRFTIME('%Y-%m-%d', datetime('now')));",
@@ -192,6 +200,7 @@ def insert_income(message, money):
 
 
 def insert_expense(message, money):
+    """Добавляет расход в таблицу"""
     with sqlite3.connect('data.db') as cursor:
         cursor.execute("INSERT INTO Expenses (user_id, expense_amount, expense_date, expense_type)"
                        " VALUES (?, ?, STRFTIME('%Y-%m-%d', datetime('now')), ?);",
@@ -202,6 +211,7 @@ def insert_expense(message, money):
 
 @bot.callback_query_handler(func=lambda message: message.data in ('cancel_inc', 'cancel_exp'))
 def cancel_income(message):
+    """Отменяет самый последний расход or доход"""
     global pre_com
     pre_com = 'MESSAGE'
     with sqlite3.connect('data.db') as cursor:
@@ -231,6 +241,7 @@ def cancel_income(message):
 
 @bot.callback_query_handler(func=lambda message: message.data == 'income')
 def income(message):
+    """User нажал на кнопку доход"""
     global pre_com
     pre_com = 'Доход'
     edit_message('Сколько рублей вы заработали?', message.message.chat.id)
@@ -238,6 +249,7 @@ def income(message):
 
 @bot.callback_query_handler(func=lambda message: message.data == 'expense')
 def expense(message):
+    """User нажал на кнопку расход"""
     global pre_com
     pre_com = 'MESSAGE'
     keyboard_exp = types.InlineKeyboardMarkup(row_width=2)
@@ -256,6 +268,7 @@ def expense(message):
 
 @bot.callback_query_handler(func=lambda message: message.data == 'find_inc')
 def find_income(message):
+    """User нажал на кнопку Узнать доход"""
     global pre_com
     pre_com = 'MESSAGE'
     keyboard_ = types.InlineKeyboardMarkup(row_width=3)
@@ -274,6 +287,7 @@ def find_income(message):
 
 @bot.callback_query_handler(func=lambda message: message.data == 'find_exp')
 def find_expense(message):
+    """User нажал на кнопку Узнать расход"""
     global pre_com
     pre_com = 'MESSAGE'
     keyboard_ = types.InlineKeyboardMarkup(row_width=3)
@@ -383,6 +397,7 @@ def button_expense_time(message):
 
 @bot.callback_query_handler(func=lambda message: message.data in ('othere', 'otheri'))
 def button_find_expense_or_income_other(message):
+    """User Нажал на кнопку другой период расходов or доходов"""
     global pre_com
     pre_com = message.data
     com = f'Уточните, пожалуйста, за какую дату вы хотите узнать {"расход" if message.data == "othere" else "доход"}?\n' \
@@ -391,6 +406,7 @@ def button_find_expense_or_income_other(message):
 
 
 def create_tables():
+    """Создание таблиц, если их нет"""
     with sqlite3.connect('data.db') as cursor:
         command1 = """
                 CREATE TABLE IF NOT EXISTS Expenses (
