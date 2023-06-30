@@ -1,21 +1,24 @@
 import telebot
-import openai
 from telebot import types
 import sqlite3
 import re
 from tabulate import tabulate
-
+import json
 # Предыдущее сообщение
 pre_com = None
 # Тип расхода
 type_expenses = None
 # id предыдущего сообщения бота
 message_id_inline = None
+# Флаг для удаления сообщения при отправке команды start
 start_message = True
-bot = telebot.TeleBot('6289799568:AAFArEfu7yepVGeseGNzwEdAC8F44H2Aiak')
-openai_token = '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'
-channel_id = '123'
-openai.api_key = openai_token
+
+# Telegram - токен
+with open('filename.json', encoding='UTF-8') as file:
+    TOKEN_telegram = json.load(file)['telegram_token']
+
+bot = telebot.TeleBot(TOKEN_telegram)
+
 
 # Основная клавиатура
 keyboard = types.InlineKeyboardMarkup(row_width=2)
@@ -34,7 +37,7 @@ def start(message):
     global message_id_inline, start_message
     com = """
     Привет!\n
-    Это бот, который умеет запоминать твои расходы и доходы, а также предлагать советы по финансовой грамотности.\n
+    Это бот, который умеет запоминать твои расходы и доходы.\n
     Если хочешь добавить свои расходы, то нажми на кнопку <u><b>Доход</b></u> и сумму.\n
     Если хочешь добавить свои доходы, то нажми на кнопку <u><b>Расход</b></u>, его тип и сумму.\n
     Если хочешь посмотреть свои расходы, то нажми на кнопку <u><b>Узнать расход</b></u>.\n
@@ -67,23 +70,56 @@ def start(message):
 # Команда /help
 @bot.message_handler(commands=['help'])
 def helping(message):
-    global message_id_inline
     com = """
-        Я умею запоминать ваши доходы и расходы, выбирать их за определённый период времени, а также давать советы по
-финансовой грамотности, исходя из ваших трат и заработков.\n
+        Я умею запоминать ваши доходы и расходы и помогать вам следить за своими сбережениями.\n
     Если хочешь добавить свои расходы, то нажми на кнопку <u><b>Доход</b></u>.\n
     Если хочешь добавить свои доходы, то нажми на кнопку <u><b>Расход</b></u>.\n
     Если хочешь посмотреть свои расходы, то нажми на кнопку <u><b>Узнать расход</b></u>.\n
     Если хочешь посмотреть свои доходы, то нажми на кнопку <u><b>Узнать доход</b></u>.\n
     Если хочешь отменить добавленный <u>доход</u>, то нажми <u><b>Отменить доход</b></u>. 
     <b>(только учти, что удаляется самый последний добавленный доход)</b>.\n
-    Если хочешь отменить добавленный <u>расход</u>, то нажми <u><b>Отменить расход</b></u>. 
+    Если хочешь отменить добавленный <u>расход</u>, то нажми <u><b>Отменить расход</b></u>\n
+    Команды:\n
+    - /start - Запуск бота
+    - /help - Помощь
+    - /balance - Ваш текущий баланс средств
     """
     bot.delete_message(message.chat.id, message.message_id)
     try:
         edit_message(com, message.chat.id, markup=True, parse='html')
     except telebot.apihelper.ApiTelegramException:
         pass
+
+
+@bot.message_handler(commands=['balance'])
+def balance(message):
+    """Отправляет пользователю его текущий баланс средств"""
+    with sqlite3.connect('data.db') as cursor:
+        command1 = """
+                SELECT SUM(Income.income_amount) FROM Users INNER JOIN Income 
+                ON Users.user_id = Income.user_id;
+        """
+        command2 = """
+                SELECT SUM(Expenses.expense_amount) FROM Users INNER JOIN Expenses
+                ON Users.user_id = Expenses.user_id;
+        """
+        result_income = cursor.execute(command1).fetchone()[0]
+        if result_income is None:
+            result_income = 0
+        result_expense = cursor.execute(command2).fetchone()[0]
+        if result_expense is None:
+            result_expense = 0
+        result = result_income - result_expense
+        if result % 10 == 1:
+            rus = "рубль"
+        elif 2 <= result % 10 < 5:
+            rus = "рубля"
+        else:
+            rus = "рублей"
+
+        bot.delete_message(message.chat.id, message.message_id)
+        edit_message(f'Ваш баланс: <b>{result}</b> {rus}.\n Что вы хотите выбрать?', message.chat.id, markup=True,
+                     parse='html')
 
 
 def edit_message(com, chat, markup=None, parse=None):
@@ -232,7 +268,7 @@ def cancel_income(message):
         if result[0]:
             com = f'Последний {"расход" if message.data == "cancel_exp" else "доход"} успешно удалён.'
         else:
-            com = f'{"Доходов" if message.data == "cancel_exp" else "Расходов"} больше не осталось.'
+            com = f'{"Доходов" if message.data == "cancel_inc" else "Расходов"} больше не осталось.'
         try:
             edit_message(com, message.message.chat.id, markup=True)
         except telebot.apihelper.ApiTelegramException:
@@ -400,8 +436,8 @@ def button_find_expense_or_income_other(message):
     """User Нажал на кнопку другой период расходов or доходов"""
     global pre_com
     pre_com = message.data
-    com = f'Уточните, пожалуйста, за какую дату вы хотите узнать {"расход" if message.data == "othere" else "доход"}?\n' \
-          f'Вводите дату в формате YYYY-MM-DD'
+    com = f'Уточните, пожалуйста, за какую дату вы хотите узнать ' \
+          f'{"расход" if message.data == "othere" else "доход"}?\nВводите дату в формате YYYY-MM-DD'
     edit_message(com, message.message.chat.id)
 
 
