@@ -34,7 +34,8 @@ keyboard.add(button1, button2, button3, button4, button5, button6)
 # Команда "/start"
 @bot.message_handler(commands=['start'])
 def start(message):
-    global message_id_inline, start_message
+    global message_id_inline, start_message, pre_com
+    pre_com = 'MESSAGE'
     com = """
     Привет!\n
     Это бот, который умеет запоминать твои расходы и доходы.\n
@@ -45,12 +46,12 @@ def start(message):
     Если хочешь отменить добавленный <u>доход</u>, то нажми <u><b>Отменить доход</b></u>. 
     <b>(только учти, что удаляется самый последний добавленный доход)</b>.\n
     Если хочешь отменить добавленный <u>расход</u>, то нажми <u><b>Отменить расход</b></u>.\n
-    Для более подробной информации о боте нажмите /help.
+    Для более подробной информации о боте нажмите /help.\n\n
+    Что вы хотите выбрать?
     """
     if start_message:
         start_message = False
-        bot.send_message(message.chat.id, com, parse_mode='html')
-        response = bot.send_message(message.chat.id, 'Что вы хотите выбрать?', reply_markup=keyboard)
+        response = bot.send_message(message.chat.id, com, reply_markup=keyboard)
         message_id_inline = response.message_id
         # Проверяем, есть ли пользователь в нашей БД
         with sqlite3.connect('data.db') as cursor:
@@ -65,11 +66,18 @@ def start(message):
                 cursor.execute(command, (message.from_user.id,))
     else:
         bot.delete_message(message.chat.id, message.message_id)
+        try:
+            edit_message("Бот уже запущен. Если что-то непонятно - нажмите /help.\n Что вы хотите выбрать?",
+                         message.chat.id, markup=True)
+        except telebot.apihelper.ApiTelegramException:
+            pass
 
 
 # Команда /help
 @bot.message_handler(commands=['help'])
 def helping(message):
+    global pre_com
+    pre_com = 'MESSAGE'
     com = """
         Я умею запоминать ваши доходы и расходы и помогать вам следить за своими сбережениями.\n
     Если хочешь добавить свои расходы, то нажми на кнопку <u><b>Доход</b></u>.\n
@@ -85,6 +93,7 @@ def helping(message):
     - /balance - Ваш текущий баланс средств
     """
     bot.delete_message(message.chat.id, message.message_id)
+
     try:
         edit_message(com, message.chat.id, markup=True, parse='html')
     except telebot.apihelper.ApiTelegramException:
@@ -94,6 +103,8 @@ def helping(message):
 @bot.message_handler(commands=['balance'])
 def balance(message):
     """Отправляет пользователю его текущий баланс средств"""
+    global pre_com
+    pre_com = 'MESSAGE'
     with sqlite3.connect('data.db') as cursor:
         command1 = """
                 SELECT SUM(Income.income_amount) FROM Users INNER JOIN Income 
@@ -118,8 +129,11 @@ def balance(message):
             rus = "рублей"
 
         bot.delete_message(message.chat.id, message.message_id)
-        edit_message(f'Ваш баланс: <b>{result}</b> {rus}.\n Что вы хотите выбрать?', message.chat.id, markup=True,
-                     parse='html')
+        try:
+            edit_message(f'Ваш баланс: <b>{result}</b> {rus}.\n Что вы хотите выбрать?', message.chat.id, markup=True,
+                         parse='html')
+        except telebot.apihelper.ApiTelegramException:
+            pass
 
 
 def edit_message(com, chat, markup=None, parse=None):
@@ -135,6 +149,7 @@ def edit_message(com, chat, markup=None, parse=None):
 @bot.message_handler(func=lambda message: pre_com in ('Доход', 'Расход'))
 def counting_money(message):
     """Пользователь написал сумму"""
+    global pre_com
     money = message.text
     error = ''
     try:
@@ -160,11 +175,14 @@ def counting_money(message):
             insert_income(message, money)
         else:
             insert_expense(message, money)
+    finally:
+        pre_com = 'MESSAGE'
 
 
 @bot.message_handler(func=lambda message: pre_com in ('othere', 'otheri'))
 def time_period(message):
     """User ввёл дату"""
+    global pre_com
     pattern = r"^\d{4}-\d{2}-\d{2}$"
     if re.match(pattern, message.text):
         with sqlite3.connect('data.db') as cursor:
@@ -204,6 +222,7 @@ def time_period(message):
         except telebot.apihelper.ApiTelegramException:
             pass
     bot.delete_message(message.chat.id, message.message_id)
+    pre_com = 'MESSAGE'
 
 
 @bot.message_handler(func=lambda message: pre_com == 'Другое')
@@ -219,10 +238,12 @@ def other_type_expense(message):
 @bot.message_handler(func=lambda message: True)
 def other_message(message):
     """Все остальные сообщения"""
-    global pre_com
     if pre_com == 'MESSAGE':
         bot.delete_message(message.chat.id, message.message_id)
-        edit_message('Пожалуйста, пишите сообщения только тогда, когда вас просят :)', message.chat.id, markup=True)
+        try:
+            edit_message('Пожалуйста, пишите сообщения только тогда, когда вас просят :)', message.chat.id, markup=True)
+        except telebot.apihelper.ApiTelegramException:
+            pass
 
 
 def insert_income(message, money):
