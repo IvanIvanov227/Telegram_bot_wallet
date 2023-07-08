@@ -5,13 +5,11 @@ import re
 from tabulate import tabulate
 import json
 # Предыдущее сообщение
-pre_com = None
+pre_com = "MESSAGE"
 # Тип расхода
 type_expenses = None
 # id предыдущего сообщения бота
 message_id_inline = None
-# Флаг для удаления сообщения при отправке команды start
-start_message = True
 
 # Telegram - токен
 with open('filename.json', encoding='UTF-8') as file:
@@ -34,7 +32,7 @@ keyboard.add(button1, button2, button3, button4, button5, button6)
 # Команда "/start"
 @bot.message_handler(commands=['start'])
 def start(message):
-    global message_id_inline, start_message, pre_com
+    global message_id_inline, pre_com
     pre_com = 'MESSAGE'
     com = """
     Привет!\n
@@ -46,31 +44,24 @@ def start(message):
     Если хочешь отменить добавленный <u>доход</u>, то нажми <u><b>Отменить доход</b></u>. 
     <b>(только учти, что удаляется самый последний добавленный доход)</b>.\n
     Если хочешь отменить добавленный <u>расход</u>, то нажми <u><b>Отменить расход</b></u>.\n
+    Пожалуйста, не удаляйте данной сообщение для корректной работы бота :).\n
     Для более подробной информации о боте нажмите /help.\n\n
-    Что вы хотите выбрать?
     """
-    if start_message:
-        start_message = False
-        response = bot.send_message(message.chat.id, com, reply_markup=keyboard)
-        message_id_inline = response.message_id
+    with sqlite3.connect('data.db') as cursor:
         # Проверяем, есть ли пользователь в нашей БД
-        with sqlite3.connect('data.db') as cursor:
-            commands = """
+        command = """
                     SELECT user_id FROM Users;
             """
-            result = [row[0] for row in cursor.execute(commands).fetchall()]
-            if message.from_user.id not in result:
-                command = """
-                            INSERT INTO Users (user_id) VALUES (?);
-                        """
-                cursor.execute(command, (message.from_user.id,))
-    else:
+        result = [row[0] for row in cursor.execute(command).fetchall()]
+        if message.from_user.id not in result:
+            command = """
+                INSERT INTO Users (user_id) VALUES (?);
+            """
+            cursor.execute(command, (message.from_user.id,))
         bot.delete_message(message.chat.id, message.message_id)
-        try:
-            edit_message("Бот уже запущен. Если что-то непонятно - нажмите /help.\n Что вы хотите выбрать?",
-                         message.chat.id, markup=True)
-        except telebot.apihelper.ApiTelegramException:
-            pass
+        bot.send_message(message.chat.id, com, parse_mode='html')
+        response = bot.send_message(message.chat.id, "Что вы хотите выбрать?", reply_markup=keyboard)
+        message_id_inline = response.message_id
 
 
 # Команда /help
@@ -108,16 +99,16 @@ def balance(message):
     with sqlite3.connect('data.db') as cursor:
         command1 = """
                 SELECT SUM(Income.income_amount) FROM Users INNER JOIN Income 
-                ON Users.user_id = Income.user_id;
+                ON Users.user_id = Income.user_id WHERE Users.user_id = (?);
         """
         command2 = """
                 SELECT SUM(Expenses.expense_amount) FROM Users INNER JOIN Expenses
-                ON Users.user_id = Expenses.user_id;
+                ON Users.user_id = Expenses.user_id WHERE Users.user_id = (?);
         """
-        result_income = cursor.execute(command1).fetchone()[0]
+        result_income = cursor.execute(command1, (message.from_user.id,)).fetchone()[0]
         if result_income is None:
             result_income = 0
-        result_expense = cursor.execute(command2).fetchone()[0]
+        result_expense = cursor.execute(command2, (message.from_user.id,)).fetchone()[0]
         if result_expense is None:
             result_expense = 0
         result = result_income - result_expense
@@ -276,13 +267,13 @@ def cancel_income(message):
             commands = """
                  DELETE FROM Income
                  WHERE Income.user_id = (?) AND
-                 income_id = (SELECT MAX(income_id) FROM Income);
+                 income_id = (SELECT income_id FROM Income ORDER BY income_id DESC LIMIT 1);
             """
         else:
             commands = """
                  DELETE FROM Expenses
                  WHERE Expenses.user_id = (?) AND
-                 expense_id = (SELECT MAX(expense_id) FROM Expenses);
+                 expense_id = (SELECT expense_id FROM Expenses ORDER BY expense_id DESC LIMIT 1);
             """
         cursor.execute(commands, (message.from_user.id, ))
         result = cursor.execute('SELECT CHANGES();').fetchone()
